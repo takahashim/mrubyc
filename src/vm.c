@@ -101,6 +101,25 @@ static void not_supported(void)
 }
 
 
+
+//================================================================
+/*!@brief
+  Push current status to callinfo stack
+
+*/
+void mrbc_push_callinfo(mrb_vm *vm, int n_args)
+{
+  mrb_callinfo *callinfo = vm->callinfo + vm->callinfo_top;
+  callinfo->reg_top = vm->reg_top;
+  callinfo->pc_irep = vm->pc_irep;
+  callinfo->pc = vm->pc;
+  callinfo->n_args = n_args;
+  callinfo->target_class = vm->target_class;
+  vm->callinfo_top++;
+}
+
+
+
 //================================================================
 /*!@brief
   Execute OP_NOP
@@ -565,37 +584,13 @@ inline static int op_send( mrb_vm *vm, uint32_t code, mrb_value *regs )
     return 0;
   }
 
-  // "call" method for block
-  // TODO: refactoring, because "call" and Ruby method calling are almost same
-  if( !strcmp(sym_name, "call") ){
-    // prepare call info
-    mrb_callinfo *callinfo = vm->callinfo + vm->callinfo_top;
-    callinfo->reg_top = vm->reg_top;
-    callinfo->pc_irep = vm->pc_irep;
-    callinfo->pc = vm->pc;
-    callinfo->target_class = vm->target_class;
-    callinfo->n_args = rc;
-    callinfo->acc = ra;
-    vm->callinfo_top++;
-
-    // target irep is PROC
-    vm->pc = 0;
-    vm->pc_irep = regs[ra].proc->irep;
-
-    // new regs
-    vm->reg_top += ra;
-
-    return 0;
-  }
-
-
   // m is C func
   if( m->c_func ) {
     m->func(vm, regs + ra, rc);
 
-    int release_reg = ra+1;
+    int release_reg = ra+rc+1;
     while( release_reg <= bidx ) {
-      mrbc_release(&regs[release_reg]);
+      // mrbc_release(&regs[release_reg]);
       release_reg++;
     }
     return 0;
@@ -603,14 +598,7 @@ inline static int op_send( mrb_vm *vm, uint32_t code, mrb_value *regs )
 
   // m is Ruby method.
   // callinfo
-  mrb_callinfo *callinfo = vm->callinfo + vm->callinfo_top;
-  callinfo->reg_top = vm->reg_top;
-  callinfo->pc_irep = vm->pc_irep;
-  callinfo->pc = vm->pc;
-  callinfo->target_class = vm->target_class;
-  callinfo->n_args = rc;
-  callinfo->acc = ra;
-  vm->callinfo_top++;
+  mrbc_push_callinfo(vm, rc);
 
   // target irep
   vm->pc = 0;
@@ -621,6 +609,30 @@ inline static int op_send( mrb_vm *vm, uint32_t code, mrb_value *regs )
 
   return 0;
 }
+
+
+//================================================================
+/*!@brief
+  Execute OP_CALL
+
+  R(A) := self.call(frame.argc, frame.argv)
+
+  @param  vm    A pointer of VM.
+  @param  code  bytecode
+  @param  regs  vm->regs + vm->reg_top
+  @retval 0  No error.
+*/
+inline static int op_call( mrb_vm *vm, uint32_t code, mrb_value *regs )
+{
+  mrbc_push_callinfo(vm, 2);
+
+  // jump to proc
+  vm->pc = 0;
+  vm->pc_irep = regs[0].proc->irep;
+
+  return 0;
+}
+
 
 
 //================================================================
@@ -978,11 +990,11 @@ inline static int op_div( mrb_vm *vm, uint32_t code, mrb_value *regs )
 inline static int op_eq( mrb_vm *vm, uint32_t code, mrb_value *regs )
 {
   int ra = GETARG_A(code);
-  int result = mrbc_eq(&regs[ra], &regs[ra+1]);
+  int result = mrbc_compare(&regs[ra], &regs[ra+1]);
 
   mrbc_release(&regs[ra+1]);
   mrbc_release(&regs[ra]);
-  regs[ra].tt = result ? MRB_TT_TRUE : MRB_TT_FALSE;
+  regs[ra].tt = result ? MRB_TT_FALSE : MRB_TT_TRUE;
 
   return 0;
 }
@@ -1517,8 +1529,8 @@ inline static int op_stop( mrb_vm *vm, uint32_t code, mrb_value *regs )
   for( i = 0; i < MAX_REGS_SIZE; i++ ) {
     mrbc_release(&vm->regs[i]);
   }
-
   vm->flag_preemption = 1;
+
   return -1;
 }
 
@@ -1640,6 +1652,9 @@ int mrbc_vm_run( mrb_vm *vm )
   int ret = 0;
 
   do {
+    // check irep length
+    if( vm->pc > vm->pc_irep->ilen ) return 0;
+
     // get one bytecode
     uint32_t code = bin_to_uint32(vm->pc_irep->code + vm->pc * 4);
     vm->pc++;
@@ -1670,6 +1685,7 @@ int mrbc_vm_run( mrb_vm *vm )
     case OP_JMPNOT:     ret = op_jmpnot    (vm, code, regs); break;
     case OP_SEND:       ret = op_send      (vm, code, regs); break;
     case OP_SENDB:      ret = op_send      (vm, code, regs); break;
+    case OP_CALL:       ret = op_call      (vm, code, regs); break;
     case OP_ENTER:      ret = op_enter     (vm, code, regs); break;
     case OP_RETURN:     ret = op_return    (vm, code, regs); break;
     case OP_BLKPUSH:    ret = op_blkpush   (vm, code, regs); break;

@@ -54,7 +54,6 @@ typedef struct CALLINFO {
   uint16_t  reg_top;
   mrb_class *target_class;
   uint8_t   n_args;     // num of args
-  uint8_t   acc;        // ra
 } mrb_callinfo;
 
 
@@ -93,6 +92,7 @@ void mrbc_vm_begin(mrb_vm *vm);
 void mrbc_vm_end(mrb_vm *vm);
 int mrbc_vm_run(mrb_vm *vm);
 
+void mrbc_push_callinfo(mrb_vm *vm, int n_args);
 
 //================================================================
 /*!@brief

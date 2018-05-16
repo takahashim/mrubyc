@@ -30,9 +30,6 @@
 #include "c_string.h"
 #include "c_range.h"
 
-#include "c_ext.h"
-
-
 
 #ifdef MRBC_DEBUG
 int mrbc_puts_sub(mrb_value *v);
@@ -338,8 +335,7 @@ void mrbc_funcall(mrb_vm *vm, const char *name, mrb_value *v, int argc)
   mrb_sym sym_id = str_to_symid(name);
   mrb_proc *m = find_method(vm, v[0], sym_id);
 
-  if( m==0 ) return;   // no initialize method
-  // call initialize method
+  if( m==0 ) return;   // no method
 
   mrb_callinfo *callinfo = vm->callinfo + vm->callinfo_top;
   callinfo->reg_top = vm->reg_top;
@@ -399,15 +395,28 @@ static void c_object_not(mrb_vm *vm, mrb_value *v, int argc)
 // Object !=
 static void c_object_neq(mrb_vm *vm, mrb_value *v, int argc)
 {
-  int result = mrbc_eq(v, v+1);
+  int result = mrbc_compare(v, v+1);
 
   mrbc_release(v);
   if( result ) {
-    SET_FALSE_RETURN();
-  } else {
     SET_TRUE_RETURN();
+  } else {
+    SET_FALSE_RETURN();
   }
 }
+
+
+//================================================================
+/*! (operator) <=>
+ */
+static void c_object_compare(mrb_vm *vm, mrb_value v[], int argc)
+{
+  int result = mrbc_compare( &v[0], &v[1] );
+
+  mrbc_release(v);
+  SET_INT_RETURN(result);
+}
+
 
 // Object#class
 static void c_object_class(mrb_vm *vm, mrb_value *v, int argc)
@@ -430,9 +439,9 @@ static void c_object_new(mrb_vm *vm, mrb_value *v, int argc)
 
 
 //================================================================
-/*! (method) instance variable reader (getter)
+/*! (method) instance variable getter
  */
-static void c_object_attr_reader(mrb_vm *vm, mrb_value v[], int argc)
+static void c_object_getiv(mrb_vm *vm, mrb_value v[], int argc)
 {
   const char *name = mrbc_get_callee_name(vm);
   mrb_sym sym_id = str_to_symid( name );
@@ -444,9 +453,9 @@ static void c_object_attr_reader(mrb_vm *vm, mrb_value v[], int argc)
 
 
 //================================================================
-/*! (method) instance variable writer (setter)
+/*! (method) instance variable setter
  */
-static void c_object_attr_writer(mrb_vm *vm, mrb_value v[], int argc)
+static void c_object_setiv(mrb_vm *vm, mrb_value v[], int argc)
 {
   const char *name = mrbc_get_callee_name(vm);
 
@@ -465,7 +474,7 @@ static void c_object_attr_writer(mrb_vm *vm, mrb_value v[], int argc)
 //================================================================
 /*! (class method) access method 'attr_reader'
  */
-static void c_class_attr_reader(mrb_vm *vm, mrb_value v[], int argc)
+static void c_object_attr_reader(mrb_vm *vm, mrb_value v[], int argc)
 {
   int i;
   for( i = 1; i <= argc; i++ ) {
@@ -473,7 +482,7 @@ static void c_class_attr_reader(mrb_vm *vm, mrb_value v[], int argc)
 
     // define reader method
     const char *name = mrbc_symbol_cstr(&v[i]);
-    mrbc_define_method(vm, v[0].cls, name, c_object_attr_reader);
+    mrbc_define_method(vm, v[0].cls, name, c_object_getiv);
   }
 }
 
@@ -481,7 +490,7 @@ static void c_class_attr_reader(mrb_vm *vm, mrb_value v[], int argc)
 //================================================================
 /*! (class method) access method 'attr_accessor'
  */
-static void c_class_attr_accessor(mrb_vm *vm, mrb_value v[], int argc)
+static void c_object_attr_accessor(mrb_vm *vm, mrb_value v[], int argc)
 {
   int i;
   for( i = 1; i <= argc; i++ ) {
@@ -489,7 +498,7 @@ static void c_class_attr_accessor(mrb_vm *vm, mrb_value v[], int argc)
 
     // define reader method
     const char *name = mrbc_symbol_cstr(&v[i]);
-    mrbc_define_method(vm, v[0].cls, name, c_object_attr_reader);
+    mrbc_define_method(vm, v[0].cls, name, c_object_getiv);
 
     // make string "....=" and define writer method.
     char *namebuf = mrbc_alloc(vm, strlen(name)+2);
@@ -497,7 +506,7 @@ static void c_class_attr_accessor(mrb_vm *vm, mrb_value v[], int argc)
     strcpy(namebuf, name);
     strcat(namebuf, "=");
     mrbc_symbol_new(vm, namebuf);
-    mrbc_define_method(vm, v[0].cls, namebuf, c_object_attr_writer);
+    mrbc_define_method(vm, v[0].cls, namebuf, c_object_setiv);
     mrbc_raw_free(namebuf);
   }
 }
@@ -538,10 +547,11 @@ static void mrbc_init_class_object(mrb_vm *vm)
   mrbc_define_method(vm, mrbc_class_object, "puts", c_puts);
   mrbc_define_method(vm, mrbc_class_object, "!", c_object_not);
   mrbc_define_method(vm, mrbc_class_object, "!=", c_object_neq);
+  mrbc_define_method(vm, mrbc_class_object, "<=>", c_object_compare);
   mrbc_define_method(vm, mrbc_class_object, "class", c_object_class);
   mrbc_define_method(vm, mrbc_class_object, "new", c_object_new);
-  mrbc_define_method(vm, mrbc_class_object, "attr_reader", c_class_attr_reader);
-  mrbc_define_method(vm, mrbc_class_object, "attr_accessor", c_class_attr_accessor);
+  mrbc_define_method(vm, mrbc_class_object, "attr_reader", c_object_attr_reader);
+  mrbc_define_method(vm, mrbc_class_object, "attr_accessor", c_object_attr_accessor);
 
 #ifdef MRBC_DEBUG
   mrbc_define_method(vm, mrbc_class_object, "instance_methods", c_object_instance_methods);
@@ -553,21 +563,14 @@ static void mrbc_init_class_object(mrb_vm *vm)
 
 static void c_proc_call(mrb_vm *vm, mrb_value *v, int argc)
 {
-  // similar to OP_SEND
-
-  // callinfo
-  mrb_callinfo *callinfo = vm->callinfo + vm->callinfo_top;
-  callinfo->reg_top = vm->reg_top;
-  callinfo->pc_irep = vm->pc_irep;
-  callinfo->pc = vm->pc;
-  callinfo->n_args = 2;
-  vm->callinfo_top++;
+  // push callinfo, but not release regs
+  mrbc_push_callinfo(vm, argc);
 
   // target irep
   vm->pc = 0;
-  vm->pc_irep = v->proc->irep;
+  vm->pc_irep = v[0].proc->irep;
 
-  vm->reg_top += argc + 1;
+  vm->reg_top = v - vm->regs;
 }
 
 
