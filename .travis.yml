@@ -1,0 +1,18 @@
+language: c
+
+sudo: false
+
+addons:
+  apt:
+    packages:
+      - ruby
+
+script:
+  - export MRUBY_CONFIG="$TRAVIS_BUILD_DIR/travis/build_config_mruby.rb"
+  - git clone --depth 1 "https://github.com/mruby/mruby.git"
+  - cd mruby && rake
+  - cd ..
+  - export PATH="$TRAVIS_BUILD_DIR/mruby/bin:$PATH"
+  - make
+  - ./sample_c/mrubyc_sample
+
